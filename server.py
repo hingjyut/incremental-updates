@@ -14,7 +14,7 @@ for i in range(3):
     update_body = 'this is update {} body'.format(i)
     print('Publishing {} to the people'.format(update_name))
     channel.basic_publish(exchange='updates',
-                          routing_key=update_name,
+                          routing_key='',
                           body=update_body)
 
 connection.close()
