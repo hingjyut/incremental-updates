@@ -1,21 +1,20 @@
 import pika
+import time
 
 connection = pika.BlockingConnection()
 
 channel = connection.channel()
 
-def on_queue_declared(queue):
-    channel.basic_publish('',
-                        'test_routing_key',
-                        'message body value',
-                        pika.BasicProperties(content_type='text/plain',
-                                            delivery_mode=1))
+channel.exchange_declare(exchange='updates',
+                         exchange_type='fanout')
 
-channel.queue_declare(queue='updates',
-                      durable=True, 
-                      exclusive=True, 
-                      auto_delete=False, 
-                      callback=on_queue_declared)
-
+for i in range(3):
+    time.sleep(5)
+    update_name = 'update {}'.format(i)
+    update_body = 'this is update {} body'.format(i)
+    print('Publishing {} to the people'.format(update_name))
+    channel.basic_publish(exchange='updates',
+                          routing_key=update_name,
+                          body=update_body)
 
 connection.close()
