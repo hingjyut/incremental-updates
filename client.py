@@ -3,7 +3,7 @@ import pika
 import uuid
 import json
 
-class Client(object):
+class Client:
 
     def __init__(self):
         self.connection = pika.BlockingConnection()
@@ -34,17 +34,22 @@ class Client(object):
         while self.response is None:
             self.connection.process_data_events()
         # store uuid and version into a json file
-        store_info(self.corr_id, int(self.response))
+        self.store_info(self)
         return int(self.response)
 
     def store_info(self, client_uuid, version):
-        filename = "clien-uuid.json"
-        data = {client_uuid, version}
+        filename = "persistent.json"
+        data = {
+            'client-uuid': client_uuid,
+            'current-version': version
+        }
+
         json_object = json.dumps(data, indent = 4)
 
         # stores uuid into file if it is not in the file yet
         with open(filename, "w") as f:
             f.write(json_object)
+            f.close()
 
 # ## This is a client file
 # import pika
