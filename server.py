@@ -2,23 +2,25 @@ import pika
 import time
 import json
 import uuid
+from threading import Thread
 from hashlib import blake2b
 
 from common import *
 
-connection = pika.BlockingConnection()
+software_name = input("What is your software name? ")
 
-channel = connection.channel()
-
-channel.exchange_declare(exchange='updates',
-                         exchange_type='fanout')
+latest_version = input("Please type the first version below:\n")
+latest_version_hash = blake2b(bytes(latest_version, encoding='utf8')).hexdigest()
 
 def on_new_client_request(ch, method, props, body):
     global latest_version
     global latest_version_hash
 
+    print("Got a new client request")
+
+    new_client_uuid = str(uuid.uuid4())
     response = json.dumps({
-        'client-uuid': uuid.uuid4(),
+        'client-uuid': new_client_uuid,
         'latest-version': latest_version,
         'latest-version-hash': latest_version_hash
     })
@@ -29,39 +31,66 @@ def on_new_client_request(ch, method, props, body):
                                                      props.correlation_id),
                      body=response)
     ch.basic_ack(delivery_tag=method.delivery_tag)
+    print("Just added new client {}".format(new_client_uuid))
 
-software_name = input("What is your software name? ")
-latest_version = input("Please type the first version below:\n")
-latest_version_hash = blake2b(bytes(latest_version)).hexdigest()
+def listen_for_new_clients(software_name):
+    connection = pika.BlockingConnection()
+    channel = connection.channel()
+    channel.queue_declare(queue='{} client'.format(software_name))
+    channel.basic_qos(prefetch_count=1)
+    channel.basic_consume(queue='{} client'.format(software_name), 
+                          on_message_callback=on_new_client_request)
 
-channel.basic_qos(prefetch_count=1)
-channel.basic_consume(queue='rpc_queue', on_message_callback=on_new_client_request)
+    print(" [x] Awaiting RPC requests")
+    try:
+        channel.start_consuming()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        connection.close()
 
-print(" [x] Awaiting RPC requests")
-channel.start_consuming()
+def publish_updates(software_name):
+    global latest_version
+    global latest_version_hash
 
-nb_updates = 0
+    connection = pika.BlockingConnection()
+    channel = connection.channel()
+    channel.exchange_declare(exchange='updates',
+                             exchange_type='fanout')
+    nb_updates = 0
 
-while True:
-    new_update_input = input("Do you want to publish an update?")
+    while True:
+        new_update_input = input("Do you want to publish an update?")
 
-    if new_update_input != "yes" and new_update_input != "y":
-        continue
+        if new_update_input != "yes" and new_update_input != "y":
+            break
 
-    nb_updates += 1
-    update_begin = int(input(" update begin: "))
-    update_end = int(input(" update end: "))
-    update_content = bytes(input(" update content: "))
+        nb_updates += 1
+        update_begin = int(input(" update begin: "))
+        update_end = int(input(" update end: "))
+        update_content = input(" update content: ")
 
-    latest_version = substitute_range(update_begin, update_end, latest_version, update_content)
-    latest_version_hash = blake2b(bytes(latest_version)).hexdigest()
-    
-    print('Publishing update {} to the people'.format(nb_updates))
-    channel.basic_publish(exchange='{} updates'.format(software_name),
-                          routing_key='',
-                          body=json.dumps({
-                              'update-content': update_content,
-                              'latest-version-hash': latest_version_hash
-                          }))
+        print(" old version: {}".format(latest_version))
+        latest_version = substitute_range(update_begin, update_end, latest_version, update_content)
+        print(" new version: {}".format(latest_version))
 
-connection.close()
+        latest_version_hash = blake2b(bytes(latest_version, encoding='utf8')).hexdigest()
+        
+        print('Publishing update {} to the people'.format(nb_updates))
+        channel.basic_publish(exchange='{} updates'.format(software_name),
+                            routing_key='',
+                            body=json.dumps({
+                                'update-begin': update_begin,
+                                'update-end': update_end,
+                                'update-content': update_content,
+                                'latest-version-hash': latest_version_hash
+                            }))
+
+    connection.close()
+
+new_clients_thread = Thread(target=listen_for_new_clients, args=[software_name])
+new_clients_thread.start()
+
+publish_updates(software_name)
+
+new_clients_thread.join(1.0)
