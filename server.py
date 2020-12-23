@@ -10,7 +10,9 @@ from common import *
 software_name = input("What is your software name? ")
 
 latest_version = input("Please type the first version below:\n")
-latest_version_hash = blake2b(bytes(latest_version, encoding='utf8')).hexdigest()
+latest_version_hash = blake2b(
+    bytes(latest_version, encoding='utf8')).hexdigest()
+
 
 def on_new_client_request(ch, method, props, body):
     global latest_version
@@ -27,18 +29,26 @@ def on_new_client_request(ch, method, props, body):
 
     ch.basic_publish(exchange='',
                      routing_key=props.reply_to,
-                     properties=pika.BasicProperties(correlation_id = \
-                                                     props.correlation_id),
+                     properties=pika.BasicProperties(
+                         correlation_id=props.correlation_id),
                      body=response)
     ch.basic_ack(delivery_tag=method.delivery_tag)
+
+    new_update_result = ch.queue_declare(
+        queue=new_client_uuid, exclusive=False)
+    client_update_queue = new_update_result.method.queue
+    ch.queue_bind(exchange='{} updates'.format(software_name),
+                  queue=client_update_queue)
+
     print("Just added new client {}".format(new_client_uuid))
+
 
 def listen_for_new_clients(software_name):
     connection = pika.BlockingConnection()
     channel = connection.channel()
     channel.queue_declare(queue='{} client'.format(software_name))
     channel.basic_qos(prefetch_count=1)
-    channel.basic_consume(queue='{} client'.format(software_name), 
+    channel.basic_consume(queue='{} client'.format(software_name),
                           on_message_callback=on_new_client_request)
 
     print(" [x] Awaiting RPC requests")
@@ -48,6 +58,7 @@ def listen_for_new_clients(software_name):
         pass
     finally:
         connection.close()
+
 
 def publish_updates(software_name):
     global latest_version
@@ -71,24 +82,28 @@ def publish_updates(software_name):
         update_content = input(" update content: ")
 
         print(" old version: {}".format(latest_version))
-        latest_version = substitute_range(update_begin, update_end, latest_version, update_content)
+        latest_version = substitute_range(
+            update_begin, update_end, latest_version, update_content)
         print(" new version: {}".format(latest_version))
 
-        latest_version_hash = blake2b(bytes(latest_version, encoding='utf8')).hexdigest()
-        
+        latest_version_hash = blake2b(
+            bytes(latest_version, encoding='utf8')).hexdigest()
+
         print('Publishing update {} to the people'.format(nb_updates))
         channel.basic_publish(exchange='{} updates'.format(software_name),
-                            routing_key='',
-                            body=json.dumps({
-                                'update-begin': update_begin,
-                                'update-end': update_end,
-                                'update-content': update_content,
-                                'latest-version-hash': latest_version_hash
-                            }))
+                              routing_key='',
+                              body=json.dumps({
+                                  'update-begin': update_begin,
+                                  'update-end': update_end,
+                                  'update-content': update_content,
+                                  'latest-version-hash': latest_version_hash
+                              }))
 
     connection.close()
 
-new_clients_thread = Thread(target=listen_for_new_clients, args=[software_name])
+
+new_clients_thread = Thread(
+    target=listen_for_new_clients, args=[software_name])
 new_clients_thread.start()
 
 publish_updates(software_name)
