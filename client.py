@@ -8,14 +8,17 @@ from common import substitute_range
 
 class Client:
 
+    
     def __init__(self, software_name):
         self.software_name = software_name
+        # initializes a connection and a channel
         self.connection = pika.BlockingConnection()
         self.channel = self.connection.channel()
         self.channel.exchange_declare(exchange='{} updates'.format(software_name), exchange_type='fanout')
         
         filename = "{}.json".format(self.software_name)
         f = None
+        # if json file exists, gets client uuid and current version back, and uses uuid to communicate with server
         try:
             f = open(filename, "r")
             file_content = json.loads(f.read())
@@ -25,6 +28,8 @@ class Client:
             self.current_version = file_content['current-version']
             self.latest_version_hash = blake2b(bytes(self.current_version, encoding="utf-8")).hexdigest()
 
+        # if json file doesn't exist, that means this client is the first client who trys to connect to this server
+        # it sends a request to server and waits for response
         except IOError:
             new_client_result = self.channel.queue_declare(queue='', exclusive=True)
             self.callback_queue = new_client_result.method.queue
@@ -38,10 +43,13 @@ class Client:
             self.current_version = response['latest-version']
             self.latest_version_hash = response['latest-version-hash']
 
+        # after we get uuid and latest version, client listens to server to 
         new_update_result = self.channel.queue_declare(queue=self.client_uuid, exclusive=False)
         self.update_queue = new_update_result.method.queue
+        # binds client's update queue to server's update queue to get all update informations
         self.channel.queue_bind(exchange='{} updates'.format(software_name),
                                 queue=self.update_queue)
+        # consume update info once client gets it
         self.channel.basic_consume(
             queue=self.update_queue, 
             on_message_callback=self.on_update, 
@@ -50,6 +58,7 @@ class Client:
     def start(self):
         self.channel.start_consuming()
 
+    # A callback function, returns wether the client gets updated
     def on_update(self, ch, method, properties, body):
         print("Got a new update!")
 
@@ -75,24 +84,36 @@ class Client:
         else:
             print("Rabbitmq did not deliver >:(")
 
+    ''' 
+    For every response from the server, this function checks if 
+    the correlation_id is matched, if it is, saves the response to json file and breaks 
+    the loop in call function
+    '''
     def on_response(self, ch, method, props, body):
         print("Got a response")
         if self.corr_id == props.correlation_id:
             self.response = json.loads(body)
 
+    '''
+        This function does the RPC work, it generates a correlation_id, publishes 
+        correlation_id and the reply_to queue as a request to server, then it waits until 
+        getting a response
+    '''
     def call(self):
         print("About to ask for a new UUID")
 
         self.response = None
-        self.corr_id = str(uuid.uuid4())
+        self.corr_id = str(uuid.uuid4())    # generate a random correlation id to communicate
+        # establish a rpc_queue, sends its request with correlation id and callback queue to server
         self.channel.basic_publish(
             exchange='',
             routing_key='{} client'.format(self.software_name),
             properties=pika.BasicProperties(
-                reply_to=self.callback_queue,
-                correlation_id=self.corr_id,
+                reply_to=self.callback_queue,   # reply_to: Used to name a callback queue.
+                correlation_id=self.corr_id,    # correlation_id: Useful to correlate RPC responses with requests
             ),
             body='')
+        # waiting for a response
         while self.response is None:
             self.connection.process_data_events()
 
@@ -100,6 +121,7 @@ class Client:
         # store uuid and version into a json file
         return self.response
 
+    # It stores information to a json file
     def store_info(self):
         filename = "{}.json".format(self.software_name)
         data = {
@@ -114,7 +136,7 @@ class Client:
             f.write(json_object)
             f.close()
 
-
+# 
 software_name = input("What is your software name? ")
 
 client = Client(software_name)
@@ -123,47 +145,3 @@ try:
     client.start()
 finally:
     client.store_info()
-
-
-# ## This is a client file
-# import pika
-# import uuid
-# import pathlib
-# import json
-
-# connection = pika.BlockingConnection()
-
-# channel = connection.channel()
-
-# channel.exchange_declare(exchange='updates', exchange_type='fanout')
-
-# # exclusive = False : once the consumer connection is closed, the queue doesn't be deleted
-# # use uuid4 to generate a random uuid for each client
-# result = channel.queue_declare(queue=uuid.uuid4(), exclusive = False)
-
-# queue_name = result.method.queue
-# filename = "clien-uuid.txt"
-
-# file = pathlib.Path(filename)
-# # create a file if it doesn't exist
-# if not file.exists ():
-#    uuid_file = open(filename,"x")
-
-# # stores uuid into file if it is not in the file yet
-# with open(filename) as f:
-#     if queue_name not in f.read():
-#             f.write(queue_name)
-
-# channel.queue_bind(exchange='updates', queue=queue_name)
-
-# print('[*] Waiting for updates. To exit press CTRL+C')
-
-# def callback(ch, method, properties, body):
-#     print(" Get an update from server %r" % body)
-
-# channel.basic_consume(
-#         queue=queue_name, 
-#         on_message_callback=callback, 
-#         auto_ack=True)
-
-# channel.start_consuming()
